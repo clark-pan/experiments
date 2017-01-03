@@ -1,0 +1,155 @@
+<html>
+  <head>
+    <style>
+      body, html {
+        margin: 0; padding: 0; height: 100%; width: 100%;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.3/lodash.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/3.8.1/math.js"></script>
+    <script src="./libs/tinycolor.js"></script>
+    <script>
+      (function(){
+        const canvas = document.getElementById('canvas'),
+          ctx = canvas.getContext('2d');
+        
+        const BG_COLOR = tinycolor('black').toRgbString();
+        const BG_COLOR_MASK = tinycolor(BG_COLOR).setAlpha(0.1).toRgbString();
+        const COLOR_PALLETE = _.flatten([
+          _.times(9, () => '#4EB3DE'),
+          '#8DE0A6',
+          '#FCF09F',
+          '#F27C7C',
+          _.times(14, () => '#DE528C')
+        ]);
+        
+        const resizeCanvas = () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          ctx.fillStyle = BG_COLOR;
+          ctx.fillRect(0,0, canvas.width, canvas.height);
+        }
+        
+        const render = () => {
+          ctx.fillStyle = BG_COLOR_MASK;
+          ctx.strokeWidth = 20;
+          ctx.fillRect(0,0, canvas.width, canvas.height);
+          
+          _.each(points, (point) => {
+            ctx.beginPath();
+            ctx.strokeStyle = point.color;
+            ctx.moveTo(point.last[0], point.last[1]);
+            ctx.lineTo(point.current[0], point.current[1]);
+            ctx.stroke();
+          });
+        }
+        
+        let points = [], mousePoint = [], repulse = false;
+        const VECTOR_DISTANCE_IDENTITY = [0, 0];
+        const MOUSE_POINT_DIST = 300;
+        const MOUSE_POINT_FORCE = 1;
+        const FRICTION = 0.95;
+        const JITTER = 0.05;
+        const NEGATIVE_JITTER = -1 * JITTER;
+        const BOUNDING_FORCES = {
+          TOP: [0, 10],
+          BOTTOM: [0, -10],
+          LEFT: [10, 0],
+          RIGHT: [-10, 0]
+        }
+        
+        const init = () => {
+          points = _.times(1000, () => {
+            const x = _.random(0, canvas.width, true),
+              y = _.random(0, canvas.height, true);
+            return {
+              color: _.sample(COLOR_PALLETE),
+              current : [x, y],
+              last: [x, y],
+              velocity: [math.random(-1, 1), math.random(-1, 1)]
+            }
+          });
+          
+          mousePoint = [canvas.width / 2, canvas.height / 2];
+        }
+        
+        // Apply a mouse force that attracts/repulses particles based on mouse position
+        const applyMouseForce = (point, velocity) => {
+          const mouseVector = repulse
+            ? math.subtract(point.current, mousePoint)
+            : math.subtract(mousePoint, point.current);
+          const distance = math.distance(mouseVector, VECTOR_DISTANCE_IDENTITY);
+          const force = (1 - (distance > MOUSE_POINT_DIST ? MOUSE_POINT_DIST : distance)/MOUSE_POINT_DIST) * MOUSE_POINT_FORCE;
+          const mouseForce = math.multiply(mouseVector, force/distance);
+          
+          return velocity.add(mouseForce);
+        }
+        
+        // Apply a soft bounding force to push particles back inside the screen
+        const applyBoundingForce = (point, velocity) => {
+          let boundingForce = velocity;
+          if (point.current[0] < 0) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.LEFT);
+          } else if (point.current[0] > canvas.width) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.RIGHT);
+          }
+          
+          if (point.current[1] < 0) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.TOP);
+          } else if (point.current[1] > canvas.height) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.BOTTOM);
+          }
+          
+          return boundingForce;
+        }
+        
+        // Applies a randomized jitter
+        const applyJitter = (point, velocity) => {
+          return velocity.add([math.random(NEGATIVE_JITTER, JITTER), math.random(NEGATIVE_JITTER, JITTER)]);
+        }
+        
+        // Apply friction
+        const applyFriction = (point, velocity) => {
+          return velocity.multiply(FRICTION);
+        }
+        
+        const forces = [applyMouseForce, applyBoundingForce, applyJitter, applyFriction];
+        const physics = () => {
+          points = _.map(points, (point) => {
+            const velocity = _.reduce(forces, (v, force) => force(point, v), math.chain(point.velocity)).done();
+
+            return {
+              color: point.color,
+              current : math.add(point.current, point.velocity),
+              last: point.current,
+              velocity: velocity
+            }
+          });
+        }
+        
+        const callback = (timestamp) => {
+          physics();
+          render();
+          requestAnimationFrame(callback);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        canvas.addEventListener('mousedown', () => repulse = true);
+        canvas.addEventListener('mouseup', () => repulse = false);
+        canvas.addEventListener('mousemove', (e) => {
+          mousePoint = [e.clientX, e.clientY];
+        });
+        resizeCanvas();
+        init();
+        callback();
+        
+        
+      })();
+    </script>
+  </body>
+</html>
