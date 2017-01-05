@@ -1,0 +1,222 @@
+<html>
+  <head>
+    <style>
+      body, html {
+        margin: 0; padding: 0; height: 100%; width: 100%;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.3/lodash.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/3.8.1/math.js"></script>
+    <script src="./libs/tinycolor.js"></script>
+    <script>
+      (function(){
+        const canvas = document.getElementById('canvas'),
+          ctx = canvas.getContext('2d');
+        
+        const BG_COLOR = tinycolor('black').toRgbString();
+        const BG_COLOR_MASK = tinycolor(BG_COLOR).setAlpha(0.1).toRgbString();
+        const COLOR_PALLETE = _.flatten([
+          _.times(9, () => '#4EB3DE'),
+          '#8DE0A6',
+          '#FCF09F',
+          '#F27C7C',
+          _.times(14, () => '#DE528C')
+        ]);
+        
+        const resizeCanvas = () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          ctx.fillStyle = BG_COLOR;
+          ctx.fillRect(0,0, canvas.width, canvas.height);
+        }
+        
+        const render = () => {
+          ctx.fillStyle = BG_COLOR_MASK;
+          ctx.strokeWidth = 20;
+          ctx.fillRect(0,0, canvas.width, canvas.height);
+          
+          _.each(points, (point) => {
+            ctx.beginPath();
+            ctx.strokeStyle = point.color;
+            ctx.moveTo(point.last[0], point.last[1]);
+            ctx.lineTo(point.current[0], point.current[1]);
+            ctx.stroke();
+          });
+        }
+        
+        let points = [], mousePoint = [], repulse = false;
+        const VECTOR_DISTANCE_IDENTITY = [0, 0];
+        
+        const getImageCtx = (url, desiredWidth, desiredHeight) => new Promise((resolve, reject) => {
+          const backingCanvas = document.createElement('canvas');
+          const backingCtx = backingCanvas.getContext('2d');
+          const img = new Image();
+          const desiredRatio = desiredWidth / desiredHeight;
+          img.onload = () => {
+            const actualRatio = img.width / img.height;
+            let actualWidth, actualHeight;
+            if(actualRatio > desiredRatio){
+              actualHeight = desiredHeight;
+              actualWidth = desiredHeight * actualRatio;
+            } else {
+              actualWidth = desiredWidth;
+              actualHeight = desiredWidth / actualRatio;
+            }
+            backingCanvas.width = actualWidth;
+            backingCanvas.height = actualHeight;
+            backingCtx.drawImage(img, 0, 0, actualWidth, actualHeight);
+            resolve([backingCtx, actualWidth, actualHeight]);
+          }
+          img.onerror = reject;
+          img.src = url;
+        });
+        
+        const GRID_SIZE = 8;
+        const init = () => {
+          const desiredWidth = Math.min(canvas.width, 400), desiredHeight = Math.min(canvas.height, 400);
+          getImageCtx('./images/image1.jpg', desiredWidth, desiredHeight)
+            .then(([backingCtx, actualWidth, actualHeight]) => {
+              const columns = actualWidth / GRID_SIZE,
+                rows = actualHeight / GRID_SIZE,
+                startX = (canvas.width - actualWidth) / 2,
+                startY = (canvas.height - actualHeight) / 2;
+              
+              points = _.times(rows * columns, (i) => {
+                const x = (i % columns) * GRID_SIZE,
+                  y = (~~(i / columns)) * GRID_SIZE,
+                  imageData = backingCtx.getImageData(x, y, GRID_SIZE, GRID_SIZE);
+                
+                const pixels = [];
+                for(let i = 0, len = imageData.data.length; i < len; i += 4){
+                  pixels.push(
+                    [imageData.data[i], imageData.data[i + 1], imageData.data[i + 2], imageData.data[i + 3]]
+                  );
+                }
+                const color = _.reduce(pixels, (acc, pixel) => {
+                  acc[0] += pixel[0];
+                  acc[1] += pixel[1];
+                  acc[2] += pixel[2];
+                  acc[3] += pixel[3];
+                  return acc;
+                }).map((colorComponent) => colorComponent / pixels.length);
+                
+                const pixelX = startX + x + GRID_SIZE/2,
+                  pixelY = startY + y + GRID_SIZE/2;
+                return {
+                  color: tinycolor({
+                    r: color[0],
+                    g: color[1],
+                    b: color[2],
+                    a: color[3] / 255
+                  }).toRgbString(),
+                  current : [pixelX, pixelY],
+                  last: [pixelX, pixelY],
+                  anchor: [pixelX, pixelY],
+                  velocity: [0, 0]
+                }
+              });
+              
+              mousePoint = [canvas.width / 2, canvas.height / 2];
+            });
+        }
+        
+        // Apply a mouse force that attracts/repulses particles based on mouse position
+        const MOUSE_POINT_DIST = 70;
+        const MOUSE_POINT_FORCE = 5;
+        const applyMouseForce = (point, velocity) => {
+          const mouseVector = repulse
+            ? math.subtract(point.current, mousePoint)
+            : math.subtract(mousePoint, point.current);
+          const distance = math.distance(mouseVector, VECTOR_DISTANCE_IDENTITY);
+          if(distance === 0) return velocity;
+          const force = (1 - (distance > MOUSE_POINT_DIST ? MOUSE_POINT_DIST : distance)/MOUSE_POINT_DIST) * MOUSE_POINT_FORCE;
+          const mouseForce = math.multiply(mouseVector, force/distance);
+          
+          return velocity.add(mouseForce);
+        }
+        
+        // Apply anchor
+        const ANCHOR_FORCE = 0.3;
+        const applyAnchor = (point, velocity) => {
+          const anchorVector = math.subtract(point.anchor, point.current);
+          const distance = math.distance(anchorVector, VECTOR_DISTANCE_IDENTITY);
+          if(distance === 0) return velocity;
+          
+          const force = math.multiply(anchorVector, ANCHOR_FORCE/distance);
+          
+          return velocity.add(force);
+        }
+        
+        // Apply a soft bounding force to push particles back inside the screen
+        const BOUNDING_FORCES = {
+          TOP: [0, 10],
+          BOTTOM: [0, -10],
+          LEFT: [10, 0],
+          RIGHT: [-10, 0]
+        }
+        const applyBoundingForce = (point, velocity) => {
+          let boundingForce = velocity;
+          if (point.current[0] < 0) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.LEFT);
+          } else if (point.current[0] > canvas.width) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.RIGHT);
+          }
+          
+          if (point.current[1] < 0) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.TOP);
+          } else if (point.current[1] > canvas.height) {
+            boundingForce = boundingForce.add(BOUNDING_FORCES.BOTTOM);
+          }
+          
+          return boundingForce;
+        }
+        
+        // Applies a randomized jitter
+        const JITTER = 0.05;
+        const NEGATIVE_JITTER = -1 * JITTER;
+        const applyJitter = (point, velocity) => {
+          return velocity.add([math.random(NEGATIVE_JITTER, JITTER), math.random(NEGATIVE_JITTER, JITTER)]);
+        }
+        
+        // Apply friction
+        const FRICTION = 0.7;
+        const applyFriction = (point, velocity) => {
+          return velocity.multiply(FRICTION);
+        }
+        
+        const forces = [applyMouseForce, applyAnchor, /*applyBoundingForce,*/ applyJitter, applyFriction];
+        const physics = () => {
+          _.each(points, (point) => {
+            const velocity = _.reduce(forces, (v, force) => force(point, v), math.chain(point.velocity)).done();
+            point.last = point.current;
+            point.current = math.add(point.current, point.velocity);
+            point.velocity = velocity;
+          });
+        }
+        
+        const callback = () => {
+          physics();
+          render();
+          requestAnimationFrame(callback);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        canvas.addEventListener('mousedown', () => repulse = true);
+        canvas.addEventListener('mouseup', () => repulse = false);
+        canvas.addEventListener('mousemove', (e) => {
+          mousePoint = [e.clientX, e.clientY];
+        });
+        resizeCanvas();
+        init();
+        callback();
+        
+        
+      })();
+    </script>
+  </body>
+</html>
